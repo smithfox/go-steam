@@ -73,10 +73,10 @@ func (w *Web) apiLogOn() error {
 
 	cryptedSessionKey := cryptoutil.RSAEncrypt(GetPublicKey(EUniverse_Public), sessionKey)
 	ciph, _ := aes.NewCipher(sessionKey)
-	cryptedLoginKey := cryptoutil.SymmetricEncrypt(ciph, []byte(w.SessionId))
+	cryptedLoginKey := cryptoutil.SymmetricEncrypt(ciph, []byte(w.webLoginKey))
 	data := make(url.Values)
 	data.Add("format", "json")
-	data.Add("steamid", strconv.FormatUint(uint64(w.client.SteamId()), 10))
+	data.Add("steamid", strconv.FormatUint(w.client.SteamId().ToUint64(), 10))
 	data.Add("sessionkey", string(cryptedSessionKey))
 	data.Add("encrypted_loginkey", string(cryptedLoginKey))
 	resp, err := http.PostForm("http://api.steampowered.com/ISteamUserAuth/AuthenticateUser/v0001", data)
@@ -86,7 +86,7 @@ func (w *Web) apiLogOn() error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 401 {
-		// our web session id has expired, request a new one
+		// our web login key has expired, request a new one
 		atomic.StoreUint32(&w.relogOnNonce, 1)
 		w.client.Write(NewClientMsgProtobuf(EMsg_ClientRequestWebAPIAuthenticateUserNonce, new(CMsgClientRequestWebAPIAuthenticateUserNonce)))
 		return nil
@@ -117,7 +117,6 @@ func (w *Web) handleNewLoginKey(packet *Packet) {
 		UniqueId: proto.Uint32(msg.GetUniqueId()),
 	}))
 
-	w.webLoginKey = msg.GetLoginKey()
 	// number -> string -> bytes -> base64
 	w.SessionId = base64.StdEncoding.EncodeToString([]byte(strconv.FormatUint(uint64(msg.GetUniqueId()), 10)))
 
@@ -128,13 +127,11 @@ func (w *Web) handleAuthNonceResponse(packet *Packet) {
 	// this has to be the best name for a message yet.
 	msg := new(CMsgClientRequestWebAPIAuthenticateUserNonceResponse)
 	packet.ReadProtoMsg(msg)
-	w.SessionId = msg.GetWebapiAuthenticateUserNonce()
+	w.webLoginKey = msg.GetWebapiAuthenticateUserNonce()
 
 	// if the nonce was specifically requested in apiLogOn(),
 	// don't emit an event.
 	if atomic.CompareAndSwapUint32(&w.relogOnNonce, 1, 0) {
 		w.LogOn()
-	} else {
-		w.client.Emit(new(WebSessionIdEvent))
 	}
 }
